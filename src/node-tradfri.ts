@@ -1,5 +1,8 @@
 import * as tradfri from "node-tradfri-client";
 
+const ALL_GROUPS = -1;
+const ALL_DEVICES = -2;
+
 module.exports = function(RED) {
 
   RED.httpAdmin.get('/tradfri', RED.auth.needsPermission('tradfri.read'), function(req, res) {
@@ -58,6 +61,7 @@ module.exports = function(RED) {
     let _scenes = {};
     var _listeners = {};
     var _client = null;
+    var groupTimers = new Set();
 
     var _deviceUpdatedCallback = (accessory: tradfri.Accessory) => {
       if (accessory.type === tradfri.AccessoryTypes.lightbulb) {
@@ -68,6 +72,12 @@ module.exports = function(RED) {
           _listeners[accessory.instanceId][nodeId](accessory);
         }
       }
+      if ( _listeners[ALL_DEVICES])
+      {
+        for (let nodeId in _listeners[ALL_DEVICES]) {
+          _listeners[ALL_DEVICES][nodeId](accessory);
+        }
+      }
     }
 
     var _groupUpdatedCallback = (group: tradfri.Group) => {
@@ -75,6 +85,12 @@ module.exports = function(RED) {
       if (_listeners[group.instanceId]) {
         for (let nodeId in _listeners[group.instanceId]) {
           _listeners[group.instanceId][nodeId](group);
+        }
+      }
+      if ( _listeners[ALL_GROUPS])
+      {
+        for (let nodeId in _listeners[ALL_GROUPS]) {
+          _listeners[ALL_GROUPS][nodeId](group);
         }
       }
     }
@@ -163,7 +179,21 @@ module.exports = function(RED) {
           return _lights[instanceId];
         }
       }
-      throw new Error('Light not available');
+      throw new Error('Light ID not available');
+    }
+
+    node.getLightByName = async (name: string): Promise<tradfri.Accessory> => {
+      let maxRetries = 5;
+      let timeout = 2;
+      for (let i = 0; i < maxRetries; i++) {
+        let id = Object.keys(_lights).find( id => _lights[id].name.toLowerCase() === name.toLowerCase() );
+        if (!id) {
+          await new Promise(resolve => setTimeout(resolve, timeout * 1000));
+        } else {
+          return _lights[id];
+        }
+      }
+      throw new Error('Light name not available');
     }
 
     node.getGroup = async (instanceId: number): Promise<tradfri.Group> => {
@@ -176,7 +206,34 @@ module.exports = function(RED) {
           return _groups[instanceId];
         }
       }
-      throw new Error('Group not available');
+      throw new Error('Group ID not available');
+    }
+
+    node.getGroupByName = async (name: string): Promise<tradfri.Group> => {
+      let maxRetries = 5;
+      let timeout = 2;
+      for (let i = 0; i < maxRetries; i++) {
+        let id = Object.keys(_groups).find( id => _groups[id].name.toLowerCase() === name.toLowerCase() );
+        if (!id) {
+          await new Promise(resolve => setTimeout(resolve, timeout * 1000));
+        } else {
+          return _groups[id];
+        }
+      }
+      throw new Error('Group name not available');
+    }
+
+    node.getGroupByDevice = (accessory: tradfri.Accessory): Promise<tradfri.Group> => {
+      //var _getGroup = (accessory: tradfri.Accessory) => {
+        for (let instanceId in _client.groups)
+        {
+            // Device in group? Return group
+            if ( _client.groups[instanceId].group.deviceIDs.indexOf( accessory.instanceId ) !== -1 )
+                return _client.groups[instanceId].group;
+        }
+
+        // Device not found in any registered group
+        return null;
     }
 
     node.getLights = () => {
@@ -191,11 +248,37 @@ module.exports = function(RED) {
       return _scenes;
     }
 
-    node.register = (nodeId: string, instanceId: number, callback: (arg: any) => void): void => {
+    node.register = (nodeId: string, instanceId: number, callback: (arg: any) => void, includeGroup: boolean): void => {
       if (!_listeners[instanceId]) {
         _listeners[instanceId] = {};
       }
-      _listeners[instanceId][nodeId] = callback;
+      _listeners[instanceId][nodeId] = ( data ) => {
+
+        callback(data);
+        if (includeGroup)
+        {
+          let group = node.getGroupByDevice(data);
+          if (group)
+          {
+            // Add delay to throttle group event
+            if (!groupTimers.has(group.instanceId))
+            {
+              //RED.log.trace("[Tradfri] add group timer");
+              groupTimers.add(group.instanceId);
+              setTimeout( () =>
+              {
+                // Group does not reflect light status properly (hence this injected callback); fake it
+                group.onOff = group.deviceIDs.some( id => _lights[id] && _lights[id].lightList && _lights[id].lightList[0].onOff );
+
+                callback(group);
+                //_groupUpdatedCallback.bind(this, group);
+                groupTimers.delete(group.instanceId);
+              }, 200);
+            }
+          }
+
+        }
+      }
       RED.log.info(`[Tradfri: ${nodeId}] registered event listener for ${instanceId}`);
     }
 
@@ -234,6 +317,7 @@ module.exports = function(RED) {
     node.deviceId = config.deviceId;
     node.groupId = config.groupId;
     node.observe = config.observe;
+    node.includeGroup = config.includeGroup;
     var _config = RED.nodes.getNode(config.connection);
 
     var _send = (payload: any) => {
@@ -282,14 +366,23 @@ module.exports = function(RED) {
         let operation = Object.assign({ transitionTime: 0 }, payload);
 
         let client = await _config.getClient();
-
+        let deviceId = payload.deviceId || node.deviceId;
+        let groupId = payload.groupId || node.groupId;
+        let result;
+        
         // Group or light operation?
-        let result
-        if (node.deviceId === '') {
-          const group = await _config.getGroup(node.groupId);
+        if ( payload.groupName ) {
+          const group = await _config.getGroupByName(payload.groupName);
+          result = await client.operateGroup(group, operation, true);
+        } else if ( payload.deviceName ) {
+          const light = await _config.getLightByName(payload.deviceName);
+          result = await client.operateLight(light, operation);
+        }
+        if (groupId) {
+          const group = await _config.getGroup(groupId);
           result = await client.operateGroup(group, operation, true);
         } else {
-          const light = await _config.getLight(node.deviceId);
+          const light = await _config.getLight(deviceId);
           result = await client.operateLight(light, operation);
         }
 
@@ -302,7 +395,7 @@ module.exports = function(RED) {
     if (node.observe) {
       _config.register(node.id, node.groupId, _send);
       if (node.deviceId !== '') {
-        _config.register(node.id, node.deviceId, _send);
+        _config.register(node.id, node.deviceId, _send, node.includeGroup);
       }
     }
 

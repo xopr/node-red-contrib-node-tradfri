@@ -8,7 +8,8 @@ and
 * Support for observation (i.e. reporting on changes to the light and groups).
 
 ## Usage
-Only one node (besides the config node) are necessary for operation. After the configuration has been successful -- either by providing an existing identity and PSK or by generating a new Identity and PSK by providing the security code from the gateway -- simply select which light to target and check if the node should observe the device as well. Its also possible to select [All devices] and control an entire group.
+Only one node (besides the config node) are necessary for operation. After the configuration has been successful -- either by providing an existing identity and PSK or by generating a new Identity and PSK by providing the security code from the gateway -- simply select which group and/or light to target and check if the node should observe the device as well. Its also possible to select [All devices] and control an entire group.
+Support for updating lights or groups by id or name provided in the payload has been added recently. 
 
 ### Controlling the node
 Nodes can be programmatically controlled by sending a message with `msg.payload` set to one of the following strings:
@@ -16,6 +17,8 @@ Nodes can be programmatically controlled by sending a message with `msg.payload`
 
 ### Controlling a light
 Lights can be controlled by sending an objet with one or more of the following properties as `msg.payload` to the node.
+* `deviceName` `string` Name of the device, case insensitive.
+* `deviceId` `number` ID of the device.
 * `onOff` `boolean` Turn the light on (`true`) or off (`false`).
 * `dimmer` `number` `[0,100]` The brightness of the light.
 * `colorTemperature` `number` `[0,100]` The color temperature of the light (cold white: `0`, warm white `100`).
@@ -26,13 +29,16 @@ Lights can be controlled by sending an objet with one or more of the following p
 
 ### Controlling a group
 A group can be controlled by selecting [All devices] and sending an object with one or more of the following properties as `msg.payload` to the node.
+* `groupName` `string` Name of the group, case insensitive.
+* `groupId` `number` ID of the group.
 * `dimmer` `number` The brightness in percent [0..100%].
 * `onOff` `boolean` If the lightbulb is on (`true`) or off (`false`)
 * `transitionTime` `number` The duration of state changes in seconds. Default 0.5s, not supported for on/off.
 * `sceneId` `number` Set this to the instanceId of a scene (or "mood" as IKEA calls them), to activate it.
 
-### Observing a light
-If the node is set to observe it will send a message with the light's current properties as payload every time the light is updated:
+### Observing a light or group
+If the node is set to observe it will send a message with the light or group's current properties as payload every time the light or group is updated:
+Light:
 * `name` `string` The name of this accessory as displayed in the app. Defaults to the model name.
 * `createdAt` `number` The unix timestamp of the creation of the device. Unknown what this is exactly.
 * `instanceId` `number` The ID under which the accessory is known to the gateway. Is used in callbacks throughout the library.
@@ -41,6 +47,15 @@ If the node is set to observe it will send a message with the light's current pr
 * `lastSeen` `number` The unix timestamp of the last communication with the gateway.
 * `lightList` `Light[]` An array of all lights belonging to this accessory in form of a `Light[]` array (see below).
 * `otaUpdateState` `number` Unknown. Might be a boolean
+Group:
+* `name` `string` The name of this accessory as displayed in the app. Defaults to the model name.
+* `createdAt` `number` The unix timestamp of the creation of the device. Unknown what this is exactly.
+* `instanceId` `number` The ID under which the accessory is known to the gateway. Is used in callbacks throughout the library.
+* `dimmer` `number` The brightness in percent [0..100%].
+* `onOff` `boolean` If the group is on (`true`) or off (`false`)
+* `deviceIDs` `number[]` An  array of device IDs within this group.
+* `sceneId` `number` The current active scene.
+* `groupType` `number` The type of group (currently unknown)
 `DeviceInfo` object
 * `battery` `number` The battery percentage of a device. Only present if the device is battery-powered.
 * `firmwareVersion` `string` The firmware version of the device
@@ -60,7 +75,7 @@ If the node is set to observe it will send a message with the light's current pr
 * `serialNumber` `string` Not used currently. Always ""
 `Lights` array
 * `dimmer` `number` The brightness in percent [0..100%].
-* `onOff` `boolean` If the lightbulb is on true or off false
+* `onOff` `boolean` If the lightbulb is on (`true`) or off (`false`)
 * `transitionTime` `number` The duration of state changes in seconds. Default 0.5s, not supported for on/off.
 * `isSwitchable` `boolean` Whether the lightbulb supports on/off.
 * `isDimmable` `boolean` Whether the lightbulb supports setting the brightness.
@@ -96,7 +111,7 @@ To install this repository in node red execute the following:
 ### Regular installation
 Execute the following commands:
 * `cd ~/.node-red` (depends where your node-red install directory is)
-* `npm install git+https://github.com/flavorplus/node-red-contrib-node-tradfri.git`
+* `npm install git+https://github.com/flavorplus/node-red-contrib-node-tradfri.git`<sup>1</sup>
 * (re)start Node-red and the ["]tradfri] node should appear in the [function] list.
 
 ### Docker installation
@@ -104,8 +119,9 @@ Note: this has only been tested on a Synology NAS.
 Execute the following commands:
 * `docker exec -it nodered bash` (where nodered is the name of your running node red container)
 * `cd /data`
-* `npm install git+https://github.com/flavorplus/node-red-contrib-node-tradfri.git`
+* `npm install git+https://github.com/flavorplus/node-red-contrib-node-tradfri.git`<sup>1</sup>
 
+<sup>1) update github repository link accordingly.</sup>
 ## Building
 Make sure you have [gulp-cli] installed:
 `npm install --global gulp-cli` (you might need to prefix it with `sudo ` in case of an error)
@@ -120,15 +136,20 @@ To clean, build and install, execute:
 
 ## Changelog
 
-### 0.1.3
+### 0.1.4 (xopr's addition)
+* Added support for updating groups and devices by name
+* Added support for listening to all groups, no groups, all devices and no devices
+* Added option to include group event when a device updates 
+
+### 0.1.3 (flavorplus' rewrite)
 * Added group support and scenes
 * A lot of re-writing and re-structuring
 Please read the info in node-red carefully as the payload format changed.
 
-### 0.1.2
+### 0.1.2 (freahs' NPM version)
 * Moved output status object from `msg.payload.light` to `msg.payload`.
 * Updated security code, identity and PSK to be saved as credentials in config.
 * Updated info panels and tweaked node appearance.
 
-### 0.1.1
+### 0.1.1 (freahs' NPM version)
 * Published to NPM

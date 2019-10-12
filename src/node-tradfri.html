@@ -23,7 +23,7 @@
       }
     },
     label: function() {
-      return this.name || "tradfri@" + this.address;
+      return this.name || "Trådfri@" + this.address;
     },
     oneditprepare: function() {
       var node = this;
@@ -86,6 +86,7 @@
     $group
       .find('option')
       .not(':first')
+      .not(':first')
       .remove()
     ;
     for (const id in data) {
@@ -100,6 +101,7 @@
       // Rebuild device select
       $device
         .find('option')
+        .not(':first')
         .not(':first')
         .remove()
       ;
@@ -154,8 +156,8 @@
       },
       groupId: {
         value: "",
-        required: true,
-        validate: RED.validators.number()
+        required: false,
+        validate: RED.validators.number(true)
       },
       groupName: {
         value: ""
@@ -168,13 +170,28 @@
         value: true,
         required: true
       },
+      includeGroup: {
+        value: false,
+        required: true
+      },
     },
     align: 'right',
     inputs: 1,
     outputs: 1,
     icon: 'light.png',
     label: function() {
-      return this.deviceName || this.groupName || "tradfri";
+      let text = "";
+
+      if ( this.groupName === true && this.deviceName === true )
+        text = "All groups and devices";
+      else if ( !this.groupName && this.deviceName )
+        text = this.deviceName === true ? "All devices" : this.deviceName;
+      else if ( this.groupName )
+        text = this.deviceName === true ? (this.groupName + ": all") : this.deviceName ? this.deviceName : this.groupName === true ? "All groups" : this.groupName;
+      else
+        text = "Trådfri";
+
+      return text;
     },
     oneditprepare: function() {
       const node = this;
@@ -213,15 +230,16 @@
       });
 
       $(document).ready(function() {
-        $('#node-input-msgPassthrough').prop('checked', node.observe);
+        $('#node-input-observe').prop('checked', node.observe);
+        $('#node-input-includeGroup').prop('checked', node.includeGroup);
       });
     },
     oneditsave: function() {
       let $device = $('#node-input-deviceId');
       let $group = $('#node-input-groupId');
 
-      this.deviceName = $device.val() === '' ? undefined : $device.find('option:selected').text();
-      this.groupName = $group.val() === '' ? undefined : $group.find('option:selected').text();
+      this.deviceName = $device.val() > 0 ? $device.find('option:selected').text() : $device.val() < 0 ? true : null;
+      this.groupName = $group.val() > 0 ? $group.find('option:selected').text() : $group.val() < 0 ? true : null;
     }
   });
 </script>
@@ -273,6 +291,7 @@
       <div style="position: absolute; left: 0px; right: 40px;">
         <select id="node-input-groupId" style="width: 100%">
           <option value="">None</option>
+          <option value="-1">All groups</option>
         </select>
       </div>
       <a id="tradfri-groupId-refresh" class="editor-button" style="position: absolute; right: 0px; top: 0px;"><i id="tradfri-groupId-refresh-spinner" class="fa fa-refresh"></i></a>
@@ -283,7 +302,8 @@
     <div style="display: inline-block; position: relative; width: 70%; height: 20px;">
       <div style="position: absolute; left: 0px; right: 40px;">
         <select id="node-input-deviceId" style="width: 100%">
-          <option value="">All devices</option>
+          <option value="">None</option>
+          <option value="-2">All devices</option>
         </select>
       </div>
     </div>
@@ -292,6 +312,11 @@
     <label>&nbsp;</label>
     <input type="checkbox" id="node-input-observe" style="display: inline-block; width: auto; vertical-align: top;">
     <label for="node-input-observe" style="width: 70%;">Observe device?</label>
+  </div>
+  <div class="form-row">
+    <label>&nbsp;</label>
+    <input type="checkbox" id="node-input-includeGroup" style="display: inline-block; width: auto; vertical-align: top;">
+    <label for="node-input-includeGroup" style="width: 70%;">Include group with device update</label>
   </div>
   <div class="form-row">
     <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
@@ -307,7 +332,7 @@
 </script>
 
 <script type="text/x-red" data-help-name="tradfri">
-  <p>Interface for IKEA Tradfri devices</p>
+  <p>Interface for IKEA Trådfri devices</p>
   <h3>Inputs</h3>
   <dl class="message-properties">
     <dt> payload <span class="property-type"> string  | object</span> </dt>
@@ -319,7 +344,7 @@
     <dd> The status of a light or group. </dd>
   </dl>
 
-  <h3>Details</h3> The tradfri node acts as both input and output for IKEA Tradfri lighbulbs.
+  <h3>Details</h3> The Trådfri node acts as both input and output for IKEA Trådfri lighbulbs.
 
   <h2>Scenes</h2> When a group is selected, all scenes for that group and their <code>instanceId</code> will be showed for refrence.
 

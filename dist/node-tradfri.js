@@ -10,6 +10,8 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 const tradfri = require("node-tradfri-client");
+const ALL_GROUPS = -1;
+const ALL_DEVICES = -2;
 module.exports = function (RED) {
     RED.httpAdmin.get('/tradfri', RED.auth.needsPermission('tradfri.read'), function (req, res) {
         // Get config node
@@ -62,6 +64,7 @@ module.exports = function (RED) {
         let _scenes = {};
         var _listeners = {};
         var _client = null;
+        var groupTimers = new Set();
         var _deviceUpdatedCallback = (accessory) => {
             if (accessory.type === tradfri.AccessoryTypes.lightbulb) {
                 _lights[accessory.instanceId] = accessory;
@@ -71,12 +74,22 @@ module.exports = function (RED) {
                     _listeners[accessory.instanceId][nodeId](accessory);
                 }
             }
+            if (_listeners[ALL_DEVICES]) {
+                for (let nodeId in _listeners[ALL_DEVICES]) {
+                    _listeners[ALL_DEVICES][nodeId](accessory);
+                }
+            }
         };
         var _groupUpdatedCallback = (group) => {
             _groups[group.instanceId] = group;
             if (_listeners[group.instanceId]) {
                 for (let nodeId in _listeners[group.instanceId]) {
                     _listeners[group.instanceId][nodeId](group);
+                }
+            }
+            if (_listeners[ALL_GROUPS]) {
+                for (let nodeId in _listeners[ALL_GROUPS]) {
+                    _listeners[ALL_GROUPS][nodeId](group);
                 }
             }
         };
@@ -163,7 +176,21 @@ module.exports = function (RED) {
                     return _lights[instanceId];
                 }
             }
-            throw new Error('Light not available');
+            throw new Error('Light ID not available');
+        });
+        node.getLightByName = (name) => __awaiter(this, void 0, void 0, function* () {
+            let maxRetries = 5;
+            let timeout = 2;
+            for (let i = 0; i < maxRetries; i++) {
+                let id = Object.keys(_lights).find(id => _lights[id].name.toLowerCase() === name.toLowerCase());
+                if (!id) {
+                    yield new Promise(resolve => setTimeout(resolve, timeout * 1000));
+                }
+                else {
+                    return _lights[id];
+                }
+            }
+            throw new Error('Light name not available');
         });
         node.getGroup = (instanceId) => __awaiter(this, void 0, void 0, function* () {
             let maxRetries = 5;
@@ -176,8 +203,32 @@ module.exports = function (RED) {
                     return _groups[instanceId];
                 }
             }
-            throw new Error('Group not available');
+            throw new Error('Group ID not available');
         });
+        node.getGroupByName = (name) => __awaiter(this, void 0, void 0, function* () {
+            let maxRetries = 5;
+            let timeout = 2;
+            for (let i = 0; i < maxRetries; i++) {
+                let id = Object.keys(_groups).find(id => _groups[id].name.toLowerCase() === name.toLowerCase());
+                if (!id) {
+                    yield new Promise(resolve => setTimeout(resolve, timeout * 1000));
+                }
+                else {
+                    return _groups[id];
+                }
+            }
+            throw new Error('Group name not available');
+        });
+        node.getGroupByDevice = (accessory) => {
+            //var _getGroup = (accessory: tradfri.Accessory) => {
+            for (let instanceId in _client.groups) {
+                // Device in group? Return group
+                if (_client.groups[instanceId].group.deviceIDs.indexOf(accessory.instanceId) !== -1)
+                    return _client.groups[instanceId].group;
+            }
+            // Device not found in any registered group
+            return null;
+        };
         node.getLights = () => {
             return _lights;
         };
@@ -187,11 +238,30 @@ module.exports = function (RED) {
         node.getScenes = () => {
             return _scenes;
         };
-        node.register = (nodeId, instanceId, callback) => {
+        node.register = (nodeId, instanceId, callback, includeGroup) => {
             if (!_listeners[instanceId]) {
                 _listeners[instanceId] = {};
             }
-            _listeners[instanceId][nodeId] = callback;
+            _listeners[instanceId][nodeId] = (data) => {
+                callback(data);
+                if (includeGroup) {
+                    let group = node.getGroupByDevice(data);
+                    if (group) {
+                        // Add delay to throttle group event
+                        if (!groupTimers.has(group.instanceId)) {
+                            //RED.log.trace("[Tradfri] add group timer");
+                            groupTimers.add(group.instanceId);
+                            setTimeout(() => {
+                                // Group does not reflect light status properly (hence this injected callback); fake it
+                                group.onOff = group.deviceIDs.some(id => _lights[id] && _lights[id].lightList && _lights[id].lightList[0].onOff);
+                                callback(group);
+                                //_groupUpdatedCallback.bind(this, group);
+                                groupTimers.delete(group.instanceId);
+                            }, 200);
+                        }
+                    }
+                }
+            };
             RED.log.info(`[Tradfri: ${nodeId}] registered event listener for ${instanceId}`);
         };
         node.unregister = (nodeId) => {
@@ -225,6 +295,7 @@ module.exports = function (RED) {
         node.deviceId = config.deviceId;
         node.groupId = config.groupId;
         node.observe = config.observe;
+        node.includeGroup = config.includeGroup;
         var _config = RED.nodes.getNode(config.connection);
         var _send = (payload) => {
             let msg = Object.assign({}, payload);
@@ -270,14 +341,24 @@ module.exports = function (RED) {
                 }
                 let operation = Object.assign({ transitionTime: 0 }, payload);
                 let client = yield _config.getClient();
-                // Group or light operation?
+                let deviceId = payload.deviceId || node.deviceId;
+                let groupId = payload.groupId || node.groupId;
                 let result;
-                if (node.deviceId === '') {
-                    const group = yield _config.getGroup(node.groupId);
+                // Group or light operation?
+                if (payload.groupName) {
+                    const group = yield _config.getGroupByName(payload.groupName);
+                    result = yield client.operateGroup(group, operation, true);
+                }
+                else if (payload.deviceName) {
+                    const light = yield _config.getLightByName(payload.deviceName);
+                    result = yield client.operateLight(light, operation);
+                }
+                if (groupId) {
+                    const group = yield _config.getGroup(groupId);
                     result = yield client.operateGroup(group, operation, true);
                 }
                 else {
-                    const light = yield _config.getLight(node.deviceId);
+                    const light = yield _config.getLight(deviceId);
                     result = yield client.operateLight(light, operation);
                 }
                 RED.log.trace(`[Tradfri: ${node.id}] Operation '${JSON.stringify(operation)}' returned '${result}'`);
@@ -289,7 +370,7 @@ module.exports = function (RED) {
         if (node.observe) {
             _config.register(node.id, node.groupId, _send);
             if (node.deviceId !== '') {
-                _config.register(node.id, node.deviceId, _send);
+                _config.register(node.id, node.deviceId, _send, node.includeGroup);
             }
         }
         node.on('input', function (msg) {
